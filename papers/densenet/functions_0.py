@@ -40,7 +40,7 @@ def use_least_loaded_gpu():
 
     total_util = [int(i) + int(j) for i, j in zip(gpu_mem_util, gpu_util)]
     least_loaded = np.argmin(total_util)
-    os.environ["THEANO_FLAGS"] = "device=cuda2"# + str(least_loaded)
+    os.environ["THEANO_FLAGS"] = "device=cuda0"# + str(least_loaded)
 
 
 use_least_loaded_gpu()

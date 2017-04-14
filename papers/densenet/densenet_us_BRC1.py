@@ -7,11 +7,8 @@ Creates a DenseNet model in Lasagne, following the paper
 by Gao Huang, Zhuang Liu, Kilian Q. Weinberger, 2016.
 https://arxiv.org/abs/1608.06993
 
-This defines the model in a different way than existing implementations,
-concatenating the normalized feature maps rather than normalizing the same
-features again and again. This can cut training time by 20-25%. Note that
-the model still has separately learned scales and shifts in front of each
-rectifier, otherwise it would reduce to post-activation (conv-bn-relu).
+This closely follows the authors' Torch implementation.
+See densenet_fast.py for a faster formulation.
 
 Author: Jan Schlüter
 """
@@ -19,7 +16,7 @@ Author: Jan Schlüter
 import lasagne
 from lasagne.layers import (InputLayer, Conv2DLayer, ConcatLayer, DenseLayer,
                             DropoutLayer, Pool2DLayer, GlobalPoolLayer,
-                            NonlinearityLayer, ScaleLayer, BiasLayer)
+                            NonlinearityLayer)
 from lasagne.nonlinearities import rectify, softmax
 try:
     from lasagne.layers.dnn import BatchNormDNNLayer as BatchNormLayer
@@ -79,22 +76,34 @@ def build_densenet(input_shape=(None, 3, 32, 32), input_var=None, classes=10,
     network = Conv2DLayer(network, first_output, 3, pad='same',
                           W=lasagne.init.HeNormal(gain='relu'),
                           b=None, nonlinearity=None, name='pre_conv')
-    network = BatchNormLayer(network, name='pre_bn', beta=None, gamma=None)
     # note: The authors' implementation does *not* have a dropout after the
     #       initial convolution. This was missing in the paper, but important.
     # if dropout:
     #     network = DropoutLayer(network, dropout)
     # dense blocks with transitions in between
     n = (depth - 1) // num_blocks
+    blocks = {}
     for b in range(num_blocks):
+        # if b == 0:
+        # block_size = n - 1
+        # else:
+        #     block_size = n - 2
         network = dense_block(network, n - 1, growth_rate, dropout,
                               name_prefix='block%d' % (b + 1))
         if b < num_blocks - 1:
             network = transition(network, dropout,
                                  name_prefix='block%d_trs' % (b + 1))
     # post processing until prediction
-    network = ScaleLayer(network, name='post_scale')
-    network = BiasLayer(network, name='post_shift')
+    network = BatchNormLayer(network, name='last_bn')
+    network = NonlinearityLayer(network, nonlinearity=rectify,
+                                name='last_relu')
+    network = Conv2DLayer(network, network.output_shape[1], 3, stride=1, pad='same',
+                          W=lasagne.init.HeNormal(gain='relu'),
+                          b=None, nonlinearity=None,
+                          name='last_conv')
+    if dropout:
+        network = DropoutLayer(network, dropout)
+    network = BatchNormLayer(network, name='post_bn')
     network = NonlinearityLayer(network, nonlinearity=rectify,
                                 name='post_relu')
     network = GlobalPoolLayer(network, name='post_pool')
@@ -107,16 +116,12 @@ def dense_block(network, num_layers, growth_rate, dropout, name_prefix):
     # concatenated 3x3 convolutions
     concat_layers = network
     for n in range(num_layers):
-        conv = affine_relu_conv(network, channels=growth_rate,
-                                filter_size=3, stride=1, dropout=dropout,
-                                name_prefix=name_prefix + '_l%02d' % (n + 1))
+        conv = bn_relu_conv(network, channels=growth_rate,
+                            filter_size=3, stride=1, dropout=dropout,
+                            name_prefix=name_prefix + '_l%02d' % (n + 1))
 
         concat_layers = ConcatLayer([concat_layers, conv], axis=1,
-                                    name=name_prefix + '_l%02d_join' % (n + 1))
-
-        conv = BatchNormLayer(conv, name=name_prefix + '_l%02dbn' % (n + 1),
-                              beta=None, gamma=None)
-
+                              name=name_prefix + '_l%02d_join' % (n + 1))
         network = conv
     network = concat_layers
     return network
@@ -124,19 +129,16 @@ def dense_block(network, num_layers, growth_rate, dropout, name_prefix):
 
 def transition(network, dropout, name_prefix):
     # a transition 1x1 convolution followed by avg-pooling
-    network = affine_relu_conv(network, channels=network.output_shape[1],
-                               filter_size=3, stride=2, dropout=dropout,
-                               name_prefix=name_prefix)
+    network = bn_relu_conv(network, channels=network.output_shape[1],
+                           filter_size=3, stride=2, dropout=dropout,
+                           name_prefix=name_prefix)
     # network = Pool2DLayer(network, 2, mode='average_inc_pad',
     #                       name=name_prefix + '_pool')
-    network = BatchNormLayer(network, name=name_prefix + '_bn',
-                             beta=None, gamma=None)
     return network
 
 
-def affine_relu_conv(network, channels, filter_size, stride, dropout, name_prefix):
-    network = ScaleLayer(network, name=name_prefix + '_scale')
-    network = BiasLayer(network, name=name_prefix + '_shift')
+def bn_relu_conv(network, channels, filter_size, stride, dropout, name_prefix):
+    network = BatchNormLayer(network, name=name_prefix + '_bn')
     network = NonlinearityLayer(network, nonlinearity=rectify,
                                 name=name_prefix + '_relu')
     network = Conv2DLayer(network, channels, filter_size, stride=stride, pad='same',
@@ -146,3 +148,29 @@ def affine_relu_conv(network, channels, filter_size, stride, dropout, name_prefi
     if dropout:
         network = DropoutLayer(network, dropout)
     return network
+
+
+class DenseNetInit(lasagne.init.Initializer):
+    """
+    Reproduces the initialization scheme of the authors' Torch implementation.
+    At least for the 40-layer networks, lasagne.init.HeNormal works just as
+    fine, though. Kept here just in case. If you want to swap in this scheme,
+    replace all W= arguments in all the code above with W=DenseNetInit().
+    """
+    def sample(self, shape):
+        import numpy as np
+        rng = lasagne.random.get_rng()
+        if len(shape) >= 4:
+            # convolutions use Gaussians with stddev of sqrt(2/fan_out), see
+            # https://github.com/liuzhuang13/DenseNet/blob/cbb6bff/densenet.lua#L85-L86
+            # and https://github.com/facebook/fb.resnet.torch/issues/106
+            fan_out = shape[0] * np.prod(shape[2:])
+            W = rng.normal(0, np.sqrt(2. / fan_out),
+                           size=shape)
+        elif len(shape) == 2:
+            # the dense layer uses Uniform of range sqrt(1/fan_in), see
+            # https://github.com/torch/nn/blob/651103f/Linear.lua#L21-L43
+            fan_in = shape[0]
+            W = rng.uniform(-np.sqrt(1. / fan_in), np.sqrt(1. / fan_in),
+                            size=shape)
+        return lasagne.utils.floatX(W)

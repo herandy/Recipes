@@ -91,7 +91,7 @@ def train_test(depth, growth_rate, dropout, augment, validate, epochs,
     import theano.tensor as T
     import lasagne
 
-    import densenet as densenet  # or "import densenet" for slower version
+    import densenet_us as densenet  # or "import densenet" for slower version
     import cifar10
     import progress
 
@@ -171,7 +171,7 @@ def train_test(depth, growth_rate, dropout, augment, validate, epochs,
     #       However, 1e-4 seems to work better than 5e-5, so we use 1e-4.
     # note: Torch includes biases in L2 decay. This seems to be important! So
     #       we decay all 'trainable' parameters, not just 'regularizable' ones.
-    l2_loss = 1e-4 * lasagne.regularization.regularize_network_params(
+    l2_loss = 5e-4 * lasagne.regularization.regularize_network_params(
             network, lasagne.regularization.l2, {'trainable': True})
     params = lasagne.layers.get_all_params(network, trainable=True)
     eta = theano.shared(lasagne.utils.floatX(eta), name='eta')
@@ -197,6 +197,8 @@ def train_test(depth, growth_rate, dropout, augment, validate, epochs,
         # shrink learning rate at 50% and 75% into training
         if epoch == (epochs // 2) or epoch == (epochs * 3 // 4):
             eta.set_value(eta.get_value() * lasagne.utils.floatX(0.1))
+        # if (epoch == (120)) or (epoch == (210)) or (epoch == (270)):
+        #     eta.set_value(eta.get_value() * lasagne.utils.floatX(0.2))
 
         # In each epoch, we do a full pass over the training data:
         train_loss = 0
