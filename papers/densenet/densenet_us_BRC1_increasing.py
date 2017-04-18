@@ -88,7 +88,7 @@ def build_densenet(input_shape=(None, 3, 32, 32), input_var=None, classes=10,
         # block_size = n - 1
         # else:
         #     block_size = n - 2
-        network = dense_block(network, n - 1, growth_rate, dropout,
+        network = dense_block(network, n - 1, (2 ** b) * growth_rate, dropout,
                               name_prefix='block%d' % (b + 1))
         if b < num_blocks - 1:
             network = transition(network, dropout,
@@ -97,7 +97,7 @@ def build_densenet(input_shape=(None, 3, 32, 32), input_var=None, classes=10,
     network = BatchNormLayer(network, name='last_bn')
     network = NonlinearityLayer(network, nonlinearity=rectify,
                                 name='last_relu')
-    network = Conv2DLayer(network, network.output_shape[1], 1, stride=1, pad='same',
+    network = Conv2DLayer(network, network.output_shape[1], 3, stride=1, pad='same',
                           W=lasagne.init.HeNormal(gain='relu'),
                           b=None, nonlinearity=None,
                           name='last_conv')
