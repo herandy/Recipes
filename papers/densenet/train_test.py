@@ -127,9 +127,16 @@ def train_test(depth, growth_rate, dropout, augment, validate, epochs,
     # load dataset
     print("Loading dataset...")
     val_size = 5000
-    num_labeled_data = 4000
-    X, y, X_test, y_test = cifar10.load_dataset(
-            path=os.path.join(os.path.dirname(__file__), 'data'))
+    num_labeled_data = 100
+    # X, y, X_test, y_test = cifar10.load_dataset(
+    #         path=os.path.join(os.path.dirname(__file__), 'data'))
+    print("Loading dataset...")
+    dataset = 'MNIST-test'
+    X_test, y_test = load_dataset(dataset)
+    dataset = 'MNIST-train'
+    X, y = load_dataset(dataset)
+    X, X_test = normalize(X, X_test, '[-1, -1]')
+    X, X_test = pad_data(X, X_test, 32)
     num_data = X.shape[0]
     if validate == 'test':
         X_val, y_val = X_test, y_test
